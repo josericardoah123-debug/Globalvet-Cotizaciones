@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>GlobalVet - Cotizaciones</title>
-<style>html,body,#root{height:100%;margin:0;}body{background:#F7F5F0;font-family:system-ui,-apple-system,sans-serif;-webkit-text-size-adjust:100%;} *{ -webkit-tap-highlight-color: transparent; } input,select,textarea,button{ font-size:16px; } @media (max-width: 640px){ header{ padding-left:16px !important; padding-right:16px !important; } h1{ font-size:20px !important; } header > div > div{ flex-wrap: wrap !important; } [style*="grid-template-columns: 1fr 1fr"]{ grid-template-columns: 1fr !important; } [style*="repeat(2, 1fr)"]{ grid-template-columns: 1fr !important; } [style*="padding: 24px 32px"], [style*="padding:24px 32px"]{ padding-left:16px !important; padding-right:16px !important; } } </style>
+<style>html,body,#root{height:100%;margin:0;}body{background:#F7F5F0;font-family:system-ui,-apple-system,sans-serif;-webkit-text-size-adjust:100%;} *{ -webkit-tap-highlight-color: transparent; } input,select,textarea,button{ font-size:16px; } @media (max-width: 640px){ header{ padding-left:16px !important; padding-right:16px !important; } h1{ font-size:20px !important; } header > div > div{ flex-wrap: wrap !important; } [style*="grid-template-columns: 1fr 1fr"]{ grid-template-columns: 1fr !important; } [style*="repeat(2, 1fr)"]{ grid-template-columns: 1fr !important; } [style*="padding: 24px 32px"], [style*="padding:24px 32px"]{ padding-left:16px !important; padding-right:16px !important; } } @media print { @page { margin: 10mm; } .no-print{ display:none !important; } } </style>
 </head>
 <body>
 <div id="root"></div>
@@ -7618,6 +7618,16 @@ function optimizarFoto(file, maxLado = 1000, calidad = 0.82) {
 // Subtotal de un ítem, aplicando su descuento individual (si tiene)
 const subtotalItem = i => i.cant * i.precio * (1 - (i.descItem || 0) / 100);
 
+// Imprimir con recordatorio (una vez por sesión) para quitar el encabezado/link del navegador
+let _avisoImpresion = false;
+function imprimirLimpio() {
+  if (!_avisoImpresion) {
+    _avisoImpresion = true;
+    window.alert("Para que el PDF salga limpio (sin la fecha ni el link del navegador):\n\n" + "• En la ventana que se abre, busca \"Más ajustes\" o \"More settings\".\n" + "• Desactiva la opción \"Encabezados y pies de página\" (Headers and footers).\n\n" + "Solo se hace una vez; el navegador lo recuerda.");
+  }
+  window.print();
+}
+
 // Código de factura proforma: distinto al de la cotización, e incluye la versión.
 // Cotización CV2026-001 (v2) -> Proforma PRF2026-001-V2
 const codigoProforma = c => {
@@ -11817,7 +11827,7 @@ function DocFinanciamiento({
 }) {
   const f = c.financiamiento;
   const totalPlan = f.prima + f.aFinanciar;
-  const imprimir = () => window.print();
+  const imprimir = () => imprimirLimpio();
   return /*#__PURE__*/React.createElement("div", {
     className: "fade",
     style: {
@@ -14317,7 +14327,7 @@ function VistaPDF({
     const fotos = i.fotos && i.fotos.length ? i.fotos : i.foto ? [i.foto] : [];
     return fotos.length > 0 || i.descripcion && i.descripcion.trim();
   });
-  const imprimir = () => window.print();
+  const imprimir = () => imprimirLimpio();
   const enviarWhatsApp = () => {
     const tel = (c.cliente.tel || "").replace(/\D/g, "");
     const num = tel.length >= 8 && !tel.startsWith("504") ? "504" + tel : tel; // Honduras
