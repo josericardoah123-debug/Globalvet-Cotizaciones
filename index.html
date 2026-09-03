@@ -2,9 +2,9 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>GlobalVet - Cotizaciones</title>
-<style>html,body,#root{height:100%;margin:0;}body{background:#F7F5F0;font-family:system-ui,-apple-system,sans-serif;}</style>
+<style>html,body,#root{height:100%;margin:0;}body{background:#F7F5F0;font-family:system-ui,-apple-system,sans-serif;-webkit-text-size-adjust:100%;} *{ -webkit-tap-highlight-color: transparent; } input,select,textarea,button{ font-size:16px; } @media (max-width: 640px){ header{ padding-left:16px !important; padding-right:16px !important; } h1{ font-size:20px !important; } header > div > div{ flex-wrap: wrap !important; } [style*="grid-template-columns: 1fr 1fr"]{ grid-template-columns: 1fr !important; } [style*="repeat(2, 1fr)"]{ grid-template-columns: 1fr !important; } [style*="padding: 24px 32px"], [style*="padding:24px 32px"]{ padding-left:16px !important; padding-right:16px !important; } } </style>
 </head>
 <body>
 <div id="root"></div>
@@ -7471,6 +7471,69 @@ async function dbLogout() {
   if (!dbListo()) return;
   await window.sb.auth.signOut();
 }
+
+// ---- CALENDARIO (eventos: citas y recordatorios) ----
+async function dbCargarEventos() {
+  if (!dbListo()) return null;
+  // RLS decide qué ve cada quien: vendedor solo lo suyo, gerente todo
+  const {
+    data,
+    error
+  } = await window.sb.from("eventos").select("*").order("fecha", {
+    ascending: true
+  });
+  if (error) {
+    console.error("Error al cargar eventos:", error.message);
+    return null;
+  }
+  return data || [];
+}
+async function dbGuardarEvento(ev, userId, nombre) {
+  if (!dbListo()) return null;
+  const fila = {
+    usuario_id: userId,
+    usuario: nombre,
+    tipo: ev.tipo || "cita",
+    titulo: ev.titulo,
+    fecha: ev.fecha,
+    hora: ev.hora || null,
+    cliente: ev.cliente || null,
+    lugar: ev.lugar || null,
+    nota: ev.nota || null,
+    hecho: !!ev.hecho
+  };
+  if (ev.id) {
+    const {
+      data,
+      error
+    } = await window.sb.from("eventos").update(fila).eq("id", ev.id).select().maybeSingle();
+    if (error) {
+      console.error("Error al actualizar evento:", error.message);
+      return null;
+    }
+    return data;
+  }
+  const {
+    data,
+    error
+  } = await window.sb.from("eventos").insert(fila).select().maybeSingle();
+  if (error) {
+    console.error("Error al crear evento:", error.message);
+    return null;
+  }
+  return data;
+}
+async function dbEliminarEvento(id) {
+  if (!dbListo()) return false;
+  const {
+    error
+  } = await window.sb.from("eventos").delete().eq("id", id);
+  if (error) {
+    console.error("Error al eliminar evento:", error.message);
+    return false;
+  }
+  return true;
+}
 function App() {
   const [usuario, setUsuario] = useState(null); // {nombre, rol}
   const [cotizaciones, setCotizaciones] = useState(SEED);
@@ -7482,13 +7545,15 @@ function App() {
   const [clienteActivo, setClienteActivo] = useState(null);
   const [borrador, setBorrador] = useState(null);
   const [filtro, setFiltro] = useState("todos");
+  const [eventos, setEventos] = useState([]);
+  const [userId, setUserId] = useState(null);
   const [conexion, setConexion] = useState("cargando"); // cargando | conectado | local
   const cargadoRef = useRef(false);
   const [autenticando, setAutenticando] = useState(true); // revisando sesión al abrir
 
   // Carga los datos del negocio desde la base (se llama tras iniciar sesión)
   const cargarDatos = async () => {
-    const [cots, cfg, cat] = await Promise.all([dbCargarCotizaciones(), dbCargarConfig(), dbCargarCatalogo()]);
+    const [cots, cfg, cat, evs] = await Promise.all([dbCargarCotizaciones(), dbCargarConfig(), dbCargarCatalogo(), dbCargarEventos()]);
     if (cots && cots.length) setCotizaciones(cots);else if (cots && cots.length === 0) {
       await dbGuardarCotizaciones(SEED);
       setCotizaciones(SEED);
@@ -7501,6 +7566,7 @@ function App() {
       await dbSembrarCatalogo(CATALOGO_SEED);
       setCatalogo(CATALOGO_SEED);
     }
+    if (evs) setEventos(evs);
     cargadoRef.current = true;
   };
 
@@ -7519,6 +7585,7 @@ function App() {
       rol: perfil.rol,
       email: user.email
     });
+    setUserId(user.id);
     setGerenteDesbloqueado(perfil.rol === "gerente");
     await cargarDatos();
   };
@@ -7574,6 +7641,34 @@ function App() {
     setActivaId(null);
     setBorrador(null);
     cargadoRef.current = false;
+  };
+
+  // Calendario: crear/editar y eliminar eventos
+  const guardarEvento = async ev => {
+    const guardado = await dbGuardarEvento(ev, userId, usuario?.nombre);
+    if (guardado) {
+      setEventos(prev => {
+        const existe = prev.some(e => e.id === guardado.id);
+        return existe ? prev.map(e => e.id === guardado.id ? guardado : e) : [...prev, guardado];
+      });
+    } else {
+      // Modo local (sin base de datos): guardar en memoria
+      setEventos(prev => {
+        if (ev.id) return prev.map(e => e.id === ev.id ? {
+          ...ev,
+          usuario: usuario?.nombre
+        } : e);
+        return [...prev, {
+          ...ev,
+          id: "local-" + Date.now(),
+          usuario: usuario?.nombre
+        }];
+      });
+    }
+  };
+  const eliminarEvento = async id => {
+    await dbEliminarEvento(id);
+    setEventos(prev => prev.filter(e => e.id !== id));
   };
   const activa = cotizaciones.find(c => c.id === activaId) || borrador;
   const esGerente = usuario?.rol === "gerente";
@@ -7899,6 +7994,7 @@ function App() {
     onAbrir: abrirDetalle,
     onClientes: () => setVista("clientes"),
     onCatalogo: () => setVista("catalogo"),
+    onCalendario: () => setVista("calendario"),
     onLogout: cerrarSesion,
     acciones: acciones
   }), vista === "editor" && /*#__PURE__*/React.createElement(Editor, {
@@ -7937,11 +8033,616 @@ function App() {
     config: config,
     setConfig: setConfig,
     onVolver: () => setVista("lista")
+  }), vista === "calendario" && /*#__PURE__*/React.createElement(Calendario, {
+    eventos: eventos,
+    usuario: usuario,
+    onGuardar: guardarEvento,
+    onEliminar: eliminarEvento,
+    onVolver: () => setVista("lista")
   }), vista === "pdf" && activa && /*#__PURE__*/React.createElement(VistaPDF, {
     c: activa,
     onVolver: () => setVista("detalle"),
     onNota: agregarNota
   }));
+}
+
+// ============================ CALENDARIO ============================
+function Calendario({
+  eventos,
+  usuario,
+  onGuardar,
+  onEliminar,
+  onVolver
+}) {
+  const esGerente = usuario?.rol === "gerente";
+  const [mesActual, setMesActual] = useState(() => {
+    const d = new Date();
+    return {
+      anio: d.getFullYear(),
+      mes: d.getMonth()
+    };
+  });
+  const [diaSel, setDiaSel] = useState(() => new Date().toISOString().slice(0, 10));
+  const [modal, setModal] = useState(null); // evento en edición/creación
+  const [filtroPersona, setFiltroPersona] = useState("todos"); // solo gerente
+
+  const meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const diasSemana = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+  // Lista de personas (para el filtro del gerente)
+  const personas = [...new Set(eventos.map(e => e.usuario).filter(Boolean))];
+  const eventosVisibles = esGerente && filtroPersona !== "todos" ? eventos.filter(e => e.usuario === filtroPersona) : eventos;
+
+  // Eventos por día (clave: fecha YYYY-MM-DD)
+  const porDia = {};
+  eventosVisibles.forEach(e => {
+    (porDia[e.fecha] = porDia[e.fecha] || []).push(e);
+  });
+
+  // Construir la grilla del mes
+  const primerDia = new Date(mesActual.anio, mesActual.mes, 1);
+  const diasEnMes = new Date(mesActual.anio, mesActual.mes + 1, 0).getDate();
+  const offset = primerDia.getDay();
+  const celdas = [];
+  for (let i = 0; i < offset; i++) celdas.push(null);
+  for (let d = 1; d <= diasEnMes; d++) celdas.push(d);
+  const fechaDe = d => `${mesActual.anio}-${String(mesActual.mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const cambiarMes = delta => {
+    let m = mesActual.mes + delta,
+      a = mesActual.anio;
+    if (m < 0) {
+      m = 11;
+      a--;
+    }
+    if (m > 11) {
+      m = 0;
+      a++;
+    }
+    setMesActual({
+      anio: a,
+      mes: m
+    });
+  };
+  const hoyStr = new Date().toISOString().slice(0, 10);
+  const eventosDelDia = (porDia[diaSel] || []).sort((a, b) => (a.hora || "99").localeCompare(b.hora || "99"));
+  const nuevoEvento = tipo => setModal({
+    tipo,
+    titulo: "",
+    fecha: diaSel,
+    hora: "",
+    cliente: "",
+    lugar: "",
+    nota: "",
+    hecho: false
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fade"
+  }, /*#__PURE__*/React.createElement("header", {
+    style: {
+      background: "#204090",
+      color: "#fff",
+      padding: "20px 24px 22px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 1000,
+      margin: "0 auto"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onVolver,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      background: "none",
+      border: "none",
+      color: "#A8C4CE",
+      fontSize: 14,
+      marginBottom: 14,
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement(ArrowLeft, {
+    size: 17
+  }), " Volver al tablero"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      flexWrap: "wrap",
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontSize: 24,
+      fontWeight: 600,
+      margin: 0
+    }
+  }, "Calendario"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "4px 0 0",
+      fontSize: 13.5,
+      color: "#A8C4CE"
+    }
+  }, esGerente ? "Ves las agendas de todo el equipo" : "Tus citas y recordatorios")), esGerente && personas.length > 0 && /*#__PURE__*/React.createElement("select", {
+    value: filtroPersona,
+    onChange: e => setFiltroPersona(e.target.value),
+    style: {
+      background: "rgba(255,255,255,.12)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,.25)",
+      borderRadius: 10,
+      padding: "10px 14px",
+      fontSize: 14,
+      fontWeight: 600
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos",
+    style: {
+      color: "#000"
+    }
+  }, "Todo el equipo"), personas.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p,
+    value: p,
+    style: {
+      color: "#000"
+    }
+  }, p)))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 1000,
+      margin: "0 auto",
+      padding: "22px 24px 60px",
+      display: "grid",
+      gridTemplateColumns: "1fr",
+      gap: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#fff",
+      borderRadius: 14,
+      border: "1px solid #EAE6DD",
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => cambiarMes(-1),
+    style: {
+      background: "#F2EFE8",
+      border: "none",
+      borderRadius: 8,
+      width: 34,
+      height: 34,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, /*#__PURE__*/React.createElement(ChevronRight, {
+    size: 18,
+    style: {
+      transform: "rotate(180deg)"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontSize: 18,
+      fontWeight: 600,
+      color: "#204090"
+    }
+  }, meses[mesActual.mes], " ", mesActual.anio), /*#__PURE__*/React.createElement("button", {
+    onClick: () => cambiarMes(1),
+    style: {
+      background: "#F2EFE8",
+      border: "none",
+      borderRadius: 8,
+      width: 34,
+      height: 34,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, /*#__PURE__*/React.createElement(ChevronRight, {
+    size: 18
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(7, 1fr)",
+      gap: 4
+    }
+  }, diasSemana.map(d => /*#__PURE__*/React.createElement("div", {
+    key: d,
+    style: {
+      textAlign: "center",
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: "#9A9488",
+      padding: "4px 0"
+    }
+  }, d)), celdas.map((d, i) => {
+    if (d === null) return /*#__PURE__*/React.createElement("div", {
+      key: "e" + i
+    });
+    const fecha = fechaDe(d);
+    const tiene = (porDia[fecha] || []).length;
+    const esSel = fecha === diaSel;
+    const esHoy = fecha === hoyStr;
+    return /*#__PURE__*/React.createElement("button", {
+      key: d,
+      onClick: () => setDiaSel(fecha),
+      style: {
+        aspectRatio: "1",
+        borderRadius: 9,
+        border: esHoy ? "1.5px solid #2FA3A3" : "1px solid transparent",
+        background: esSel ? "#204090" : tiene ? "#E6F4F4" : "#F7F5F0",
+        color: esSel ? "#fff" : "#2A2824",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 2,
+        fontSize: 13.5,
+        fontWeight: esHoy ? 700 : 500,
+        cursor: "pointer",
+        position: "relative"
+      }
+    }, d, tiene > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 5,
+        height: 5,
+        borderRadius: "50%",
+        background: esSel ? "#fff" : "#2FA3A3"
+      }
+    }));
+  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 12,
+      flexWrap: "wrap",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("h2", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontSize: 17,
+      fontWeight: 600,
+      color: "#204090",
+      margin: 0
+    }
+  }, (() => {
+    const [y, m, d] = diaSel.split("-");
+    return `${d} de ${meses[+m - 1]}`;
+  })()), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => nuevoEvento("cita"),
+    style: {
+      background: "#2FA3A3",
+      color: "#fff",
+      border: "none",
+      borderRadius: 9,
+      padding: "9px 14px",
+      fontSize: 13.5,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(Plus, {
+    size: 16
+  }), " Cita"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => nuevoEvento("recordatorio"),
+    style: {
+      background: "#204090",
+      color: "#fff",
+      border: "none",
+      borderRadius: 9,
+      padding: "9px 14px",
+      fontSize: 13.5,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(Bell, {
+    size: 15
+  }), " Recordatorio"))), eventosDelDia.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#fff",
+      borderRadius: 12,
+      border: "1px dashed #DDD8CE",
+      padding: "28px 20px",
+      textAlign: "center",
+      color: "#A8A498",
+      fontSize: 14
+    }
+  }, "No hay nada agendado para este día.") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 10
+    }
+  }, eventosDelDia.map(e => /*#__PURE__*/React.createElement("div", {
+    key: e.id,
+    style: {
+      background: "#fff",
+      borderRadius: 12,
+      border: "1px solid #EAE6DD",
+      padding: "13px 15px",
+      display: "flex",
+      gap: 12,
+      alignItems: "flex-start",
+      opacity: e.hecho ? 0.6 : 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 38,
+      height: 38,
+      borderRadius: 10,
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: e.tipo === "cita" ? "#E6F4F4" : "#FBF3E4",
+      color: e.tipo === "cita" ? "#1E8A8A" : "#9A6B1D"
+    }
+  }, e.tipo === "cita" ? /*#__PURE__*/React.createElement(CalendarClock, {
+    size: 19
+  }) : /*#__PURE__*/React.createElement(Bell, {
+    size: 18
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, e.hora && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: "#204090"
+    }
+  }, e.hora), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: "#2A2824",
+      textDecoration: e.hecho ? "line-through" : "none"
+    }
+  }, e.titulo)), (e.cliente || e.lugar) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#6A6558",
+      marginTop: 3
+    }
+  }, [e.cliente, e.lugar].filter(Boolean).join(" · ")), e.nota && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#8A8577",
+      marginTop: 3
+    }
+  }, e.nota), esGerente && e.usuario && e.usuario !== usuario?.nombre && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#2C6FB0",
+      marginTop: 4,
+      fontWeight: 600
+    }
+  }, "👤 ", e.usuario)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => onGuardar({
+      ...e,
+      hecho: !e.hecho
+    }),
+    title: e.hecho ? "Marcar pendiente" : "Marcar hecho",
+    style: {
+      background: e.hecho ? "#E6F4EA" : "#F2EFE8",
+      border: "none",
+      borderRadius: 7,
+      width: 30,
+      height: 30,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: e.hecho ? "#2A7A3A" : "#9A9488"
+    }
+  }, /*#__PURE__*/React.createElement(Check, {
+    size: 15
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setModal(e),
+    style: {
+      background: "#F2EFE8",
+      border: "none",
+      borderRadius: 7,
+      width: 30,
+      height: 30,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "#4A4638"
+    }
+  }, /*#__PURE__*/React.createElement(Pencil, {
+    size: 14
+  })))))))), modal && /*#__PURE__*/React.createElement(ModalEvento, {
+    evento: modal,
+    onClose: () => setModal(null),
+    onGuardar: ev => {
+      onGuardar(ev);
+      setModal(null);
+    },
+    onEliminar: id => {
+      onEliminar(id);
+      setModal(null);
+    }
+  }));
+}
+function ModalEvento({
+  evento,
+  onClose,
+  onGuardar,
+  onEliminar
+}) {
+  const [ev, setEv] = useState(evento);
+  const esCita = ev.tipo === "cita";
+  const set = (k, v) => setEv(p => ({
+    ...p,
+    [k]: v
+  }));
+  return /*#__PURE__*/React.createElement(Modal, {
+    titulo: ev.id ? "Editar" : esCita ? "Nueva cita" : "Nuevo recordatorio",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("input", {
+    value: ev.titulo,
+    onChange: e => set("titulo", e.target.value),
+    placeholder: esCita ? "Motivo de la cita" : "¿Qué recordar?",
+    style: {
+      ...inp,
+      marginBottom: 12
+    },
+    autoFocus: true
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("label", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12.5,
+      color: "#8A8577",
+      marginBottom: 6,
+      fontWeight: 500
+    }
+  }, "Fecha"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: ev.fecha,
+    onChange: e => set("fecha", e.target.value),
+    style: inp
+  })), /*#__PURE__*/React.createElement("label", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12.5,
+      color: "#8A8577",
+      marginBottom: 6,
+      fontWeight: 500
+    }
+  }, "Hora ", esCita ? "" : "(opcional)"), /*#__PURE__*/React.createElement("input", {
+    type: "time",
+    value: ev.hora || "",
+    onChange: e => set("hora", e.target.value),
+    style: inp
+  }))), esCita && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("label", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12.5,
+      color: "#8A8577",
+      marginBottom: 6,
+      fontWeight: 500
+    }
+  }, "Cliente"), /*#__PURE__*/React.createElement("input", {
+    value: ev.cliente || "",
+    onChange: e => set("cliente", e.target.value),
+    placeholder: "Nombre",
+    style: inp
+  })), /*#__PURE__*/React.createElement("label", null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12.5,
+      color: "#8A8577",
+      marginBottom: 6,
+      fontWeight: 500
+    }
+  }, "Lugar"), /*#__PURE__*/React.createElement("input", {
+    value: ev.lugar || "",
+    onChange: e => set("lugar", e.target.value),
+    placeholder: "Dónde",
+    style: inp
+  }))), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12.5,
+      color: "#8A8577",
+      marginBottom: 6,
+      fontWeight: 500
+    }
+  }, "Nota (opcional)"), /*#__PURE__*/React.createElement("textarea", {
+    value: ev.nota || "",
+    onChange: e => set("nota", e.target.value),
+    rows: 2,
+    style: {
+      ...inp,
+      resize: "vertical",
+      fontFamily: "inherit"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 8
+    }
+  }, ev.id ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => onEliminar(ev.id),
+    style: {
+      ...btnGhost,
+      borderColor: "#E8C4BF",
+      color: "#9A3B33",
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(Trash2, {
+    size: 15
+  }), " Eliminar") : /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: btnGhost
+  }, "Cancelar"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => ev.titulo.trim() && onGuardar(ev),
+    disabled: !ev.titulo.trim(),
+    style: {
+      ...btnPrimary,
+      background: ev.titulo.trim() ? "#2FA3A3" : "#D8D3C8"
+    }
+  }, "Guardar"))));
 }
 
 // ============================ LOGIN ============================
@@ -8375,6 +9076,7 @@ function Lista({
   onAbrir,
   onClientes,
   onCatalogo,
+  onCalendario,
   onLogout,
   acciones
 }) {
@@ -8507,6 +9209,22 @@ function Lista({
   }, /*#__PURE__*/React.createElement(Users, {
     size: 17
   }), " Clientes"), /*#__PURE__*/React.createElement("button", {
+    onClick: onCalendario,
+    style: {
+      background: "rgba(255,255,255,.12)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,.2)",
+      borderRadius: 10,
+      padding: "11px 16px",
+      fontSize: 14,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      gap: 7
+    }
+  }, /*#__PURE__*/React.createElement(CalendarClock, {
+    size: 17
+  }), " Calendario"), /*#__PURE__*/React.createElement("button", {
     onClick: onNueva,
     style: {
       background: "#2FA3A3",
