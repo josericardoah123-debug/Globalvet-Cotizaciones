@@ -309,6 +309,9 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script>try{ if(window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js"; }catch(e){}</script>
 <script>
 try { window.sb = (window.supabase && window.supabase.createClient) ? window.supabase.createClient("https://kvhcmiivywaqauahckwc.supabase.co", "sb_publishable_Iyx3X0U1sjaB0VNTPK_A1Q_YvymcAmD") : null; } catch(e) { window.sb = null; console.error("Supabase no disponible:", e); }
 </script>
@@ -6901,6 +6904,13 @@ const fmtFechaHora = iso => {
 };
 // Subtotal de un ítem, aplicando su descuento individual (si tiene)
 const subtotalItem = i => i.cant * i.precio * (1 - (i.descItem || 0) / 100);
+
+// Código de factura proforma: distinto al de la cotización, e incluye la versión.
+// Cotización CV2026-001 (v2) -> Proforma PRF2026-001-V2
+const codigoProforma = c => {
+  const base = (c.id || "").replace(/^CV/, "PRF");
+  return `${base}-V${c.version || 1}`;
+};
 const totalDe = c => {
   const sub = c.items.reduce((s, i) => s + subtotalItem(i), 0);
   return sub * (1 - c.descuento / 100) * (1 + ISV);
@@ -7578,9 +7588,12 @@ function App() {
   }, ...lista];
   const nuevaCotizacion = () => {
     const year = new Date().getFullYear();
-    const num = cotizaciones.length + 1;
+    // Numeración correlativa real: buscar el número más alto del año y sumar 1
+    const prefijo = `CV${year}-`;
+    const numeros = cotizaciones.filter(c => c.id && c.id.startsWith(prefijo)).map(c => parseInt(c.id.slice(prefijo.length), 10)).filter(n => !isNaN(n));
+    const num = (numeros.length ? Math.max(...numeros) : 0) + 1;
     setBorrador({
-      id: `CV${year}-${String(num).padStart(3, "0")}`,
+      id: `${prefijo}${String(num).padStart(3, "0")}`,
       estado: "borrador",
       fecha: hoy(),
       vendedor: usuario.nombre,
@@ -7593,12 +7606,13 @@ function App() {
       },
       validez: "20 días",
       pago: "Contado",
-      entrega: "Entrega inmediata",
+      entrega: "Inmediata",
       items: [],
       descuento: 0,
       version: 1,
       proximoContacto: null,
       sinAprobacion: false,
+      comentarios: "",
       bitacora: [],
       historial: [],
       _nueva: true
@@ -10043,6 +10057,7 @@ function PanelFinanciamiento({
   acciones
 }) {
   const f = c.financiamiento;
+  const [verDoc, setVerDoc] = useState(false);
   const pagadas = f.cuotas.filter(q => q.pagada);
   const abonado = f.prima + pagadas.reduce((s, q) => s + q.monto, 0);
   const totalPlan = f.prima + f.aFinanciar;
@@ -10249,7 +10264,376 @@ function PanelFinanciamiento({
     style: {
       color: "#1E8A5A"
     }
-  }, "Cobrar"), " abre WhatsApp con un mensaje de recordatorio ya escrito para esa cuota. Marca la cuota como pagada tocando el círculo."));
+  }, "Cobrar"), " abre WhatsApp con un mensaje de recordatorio ya escrito para esa cuota. Marca la cuota como pagada tocando el círculo."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setVerDoc(true),
+    style: {
+      marginTop: 14,
+      width: "100%",
+      background: "#204090",
+      color: "#fff",
+      border: "none",
+      borderRadius: 10,
+      padding: "12px",
+      fontSize: 14,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement(FileText, {
+    size: 17
+  }), " Generar documento de financiamiento"), verDoc && /*#__PURE__*/React.createElement(DocFinanciamiento, {
+    c: c,
+    onCerrar: () => setVerDoc(false)
+  }));
+}
+
+// ---- Documento de financiamiento (plan de pagos + firma) ----
+function DocFinanciamiento({
+  c,
+  onCerrar
+}) {
+  const f = c.financiamiento;
+  const totalPlan = f.prima + f.aFinanciar;
+  const imprimir = () => window.print();
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fade",
+    style: {
+      position: "fixed",
+      inset: 0,
+      background: "#E8E4DB",
+      zIndex: 60,
+      overflowY: "auto",
+      padding: "0 0 40px"
+    }
+  }, /*#__PURE__*/React.createElement("style", null, `@media print { .no-print { display: none !important; } .hoja-fin { box-shadow: none !important; margin: 0 !important; } body { background: #fff !important; } }`), /*#__PURE__*/React.createElement("div", {
+    className: "no-print",
+    style: {
+      background: "#204090",
+      padding: "14px 24px",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      position: "sticky",
+      top: 0,
+      zIndex: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onCerrar,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      background: "none",
+      border: "none",
+      color: "#fff",
+      fontSize: 14
+    }
+  }, /*#__PURE__*/React.createElement(ArrowLeft, {
+    size: 18
+  }), " Volver"), /*#__PURE__*/React.createElement("button", {
+    onClick: imprimir,
+    style: {
+      background: "#2FA3A3",
+      color: "#fff",
+      border: "none",
+      borderRadius: 9,
+      padding: "10px 18px",
+      fontSize: 14,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      gap: 7
+    }
+  }, /*#__PURE__*/React.createElement(Printer, {
+    size: 17
+  }), " Descargar / Imprimir")), /*#__PURE__*/React.createElement("div", {
+    className: "hoja-fin",
+    style: {
+      maxWidth: 800,
+      margin: "20px auto",
+      background: "#fff",
+      boxShadow: "0 4px 24px rgba(0,0,0,.12)",
+      padding: "44px 48px 36px",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      borderBottom: "2.5px solid #204090",
+      paddingBottom: 16,
+      marginBottom: 22
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 14,
+      alignItems: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("img", {
+    src: LOGO_SYM,
+    alt: "GlobalVet",
+    style: {
+      width: 64,
+      height: 64,
+      objectFit: "contain",
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontSize: 21,
+      fontWeight: 600,
+      color: "#204090",
+      lineHeight: 1.1
+    }
+  }, EMPRESA.nombre), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#6A6558",
+      marginTop: 5,
+      maxWidth: 340,
+      lineHeight: 1.5
+    }
+  }, EMPRESA.dir, /*#__PURE__*/React.createElement("br", null), "Tel: ", EMPRESA.tel, " · ", EMPRESA.email, /*#__PURE__*/React.createElement("br", null), "R.T.N. ", EMPRESA.rtn))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "right"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontSize: 20,
+      fontWeight: 600,
+      color: "#204090",
+      letterSpacing: ".02em"
+    }
+  }, "PLAN DE", /*#__PURE__*/React.createElement("br", null), "FINANCIAMIENTO"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#6A6558",
+      marginTop: 4
+    }
+  }, "Ref. ", c.id), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#6A6558"
+    }
+  }, fmtFecha(hoy())))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 22
+    }
+  }, /*#__PURE__*/React.createElement(SLabel, null, "Cliente"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: "#2A2824",
+      marginBottom: 3
+    }
+  }, c.cliente.nombre || "—"), /*#__PURE__*/React.createElement(PLine, {
+    k: "Contacto",
+    v: c.cliente.contacto
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Teléfono",
+    v: c.cliente.tel
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Correo",
+    v: c.cliente.correo
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#F5F8FD",
+      border: "1px solid #C4D4EC",
+      borderRadius: 12,
+      padding: "16px 18px",
+      marginBottom: 22
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: "10px 24px",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement(PLine, {
+    k: "Monto total de la venta",
+    v: money(f.montoTotal)
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Prima",
+    v: `${money(f.prima)} (${f.primaPct}%)`
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Saldo a financiar",
+    v: money(f.saldo)
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Interés",
+    v: f.interes > 0 ? `${money(f.interes)} (${f.interesPct}%)` : "Sin interés"
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Plazo",
+    v: `${f.meses} meses`
+  }), /*#__PURE__*/React.createElement(PLine, {
+    k: "Cuota mensual",
+    v: money(f.montoCuota)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "1px solid #C4D4EC",
+      marginTop: 12,
+      paddingTop: 10,
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "baseline"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: "#204090"
+    }
+  }, "Total del plan (prima + cuotas)"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontSize: 18,
+      fontWeight: 700,
+      color: "#204090"
+    }
+  }, money(totalPlan)))), /*#__PURE__*/React.createElement(SLabel, null, "Calendario de pagos"), /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      borderCollapse: "collapse",
+      margin: "8px 0 22px"
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: "#204090",
+      color: "#fff"
+    }
+  }, /*#__PURE__*/React.createElement("th", {
+    style: {
+      ...th,
+      width: 60,
+      textAlign: "center",
+      borderRadius: "6px 0 0 0"
+    }
+  }, "Cuota"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: "left"
+    }
+  }, "Fecha de vencimiento"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: "right",
+      borderRadius: "0 6px 0 0"
+    }
+  }, "Monto"))), /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: "#EAF0FA"
+    }
+  }, /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...td,
+      textAlign: "center",
+      fontWeight: 600
+    }
+  }, "Prima"), /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...td
+    }
+  }, "Al firmar"), /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...td,
+      textAlign: "right",
+      fontWeight: 600
+    }
+  }, money(f.prima))), f.cuotas.map((q, i) => /*#__PURE__*/React.createElement("tr", {
+    key: q.n,
+    style: {
+      background: i % 2 ? "#F7F5F0" : "#fff"
+    }
+  }, /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...td,
+      textAlign: "center"
+    }
+  }, q.n, " de ", f.meses), /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...td
+    }
+  }, fmtFecha(q.fecha)), /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...td,
+      textAlign: "right"
+    }
+  }, money(q.monto)))))), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#5A564A",
+      lineHeight: 1.6,
+      marginBottom: 30
+    }
+  }, "El cliente se compromete a pagar las cuotas en las fechas indicadas. El equipo permanece en garantía hasta la cancelación total del plan. El incumplimiento de pagos podrá generar cargos adicionales según las políticas de ", EMPRESA.nombre, "."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 40,
+      marginTop: 40,
+      pageBreakInside: "avoid"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "1.5px solid #2A2824",
+      margin: "0 10px",
+      paddingTop: 6,
+      fontSize: 12,
+      color: "#5A564A"
+    }
+  }, "Firma del cliente"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#A8A498",
+      marginTop: 3
+    }
+  }, c.cliente.nombre || "")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "1.5px solid #2A2824",
+      margin: "0 10px",
+      paddingTop: 6,
+      fontSize: 12,
+      color: "#5A564A"
+    }
+  }, "Por ", EMPRESA.nombre), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#A8A498",
+      marginTop: 3
+    }
+  }, c.vendedor || ""))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "1px solid #E5E0D6",
+      paddingTop: 16,
+      marginTop: 30,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontFamily: "'Fraunces', serif",
+      fontStyle: "italic",
+      fontSize: 12.5,
+      color: "#8A8577",
+      margin: 0,
+      lineHeight: 1.5
+    }
+  }, EMPRESA.versiculo))));
 }
 
 // ---- Modal: crear financiamiento ----
@@ -12598,7 +12982,12 @@ function VistaPDF({
       color: "#6A6558",
       marginTop: 4
     }
-  }, "No. ", c.id), /*#__PURE__*/React.createElement("div", {
+  }, "No. ", proforma ? codigoProforma(c) : c.id), (c.version || 1) > 1 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#9A9488"
+    }
+  }, "Versión ", c.version, !proforma ? ` · (Cotización ${c.id})` : ""), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: "#6A6558"
@@ -12638,7 +13027,7 @@ function VistaPDF({
   }), /*#__PURE__*/React.createElement(PLine, {
     k: "Tiempo de entrega",
     v: c.entrega
-  }))), equiposConVitrina.map((eq, idx) => {
+  }))), !proforma && equiposConVitrina.map((eq, idx) => {
     const fotos = (eq.fotos && eq.fotos.length ? eq.fotos : eq.foto ? [eq.foto] : []).slice(0, 3);
     const desc = (eq.descripcion || "").trim();
     // Límite ~1 página: recortar descripción muy larga para que no desborde
@@ -13055,6 +13444,147 @@ function Catalogo({
     });
     setEditando(e.sku);
   };
+
+  // Importar productos desde Excel o PDF
+  const [importando, setImportando] = useState(false);
+  const [previa, setPrevia] = useState(null); // productos leídos, pendientes de confirmar
+  const [errImport, setErrImport] = useState("");
+
+  // Interpreta filas leídas -> productos del catálogo (regla lempiras/dólares)
+  const filasAProductos = filas => {
+    const prods = [];
+    filas.forEach(row => {
+      // Aceptar distintos nombres de columna (flexibles)
+      const g = claves => {
+        for (const k of Object.keys(row)) {
+          const kl = k.toLowerCase().trim();
+          if (claves.some(c => kl.includes(c))) return row[k];
+        }
+        return undefined;
+      };
+      const nombre = (g(["nombre", "equipo", "producto", "descripcion del"]) || "").toString().trim();
+      if (!nombre) return;
+      const precio = parseFloat((g(["precio", "valor", "costo"]) || "0").toString().replace(/[^\d.]/g, "")) || 0;
+      const moneda = (g(["moneda"]) || "").toString().toLowerCase();
+      const esLps = moneda.includes("lemp") || moneda.includes("lps") || moneda.includes("l.");
+      const cat = (g(["categoria", "categoría", "area", "área", "tipo"]) || "Sin categoría").toString().trim() || "Sin categoría";
+      const sku = (g(["codigo", "código", "sku"]) || "").toString().trim();
+      const descripcion = (g(["descripcion", "descripción"]) || "").toString().trim();
+      const sino = v => {
+        const s = (v || "").toString().toLowerCase();
+        return s.includes("sí") || s.includes("si") || s.includes("yes") || s === "x";
+      };
+      const esUltra = sino(g(["ultrasonido"]));
+      const esTrans = sino(g(["transductor"]));
+      prods.push({
+        nombre,
+        cat,
+        sku,
+        // Lempiras -> precio final (manual). Dólares -> costo (aplica fórmula).
+        costoUSD: esLps ? 0 : precio,
+        precioManual: esLps ? precio : null,
+        moneda: esLps ? "Lempiras" : "Dólares",
+        precioMostrar: precio,
+        ofrecido: true,
+        fotos: [],
+        descripcion,
+        ...(esUltra ? {
+          esUltrasonido: true
+        } : {}),
+        ...(esTrans ? {
+          esTransductor: true
+        } : {})
+      });
+    });
+    return prods;
+  };
+  const leerArchivo = async file => {
+    setErrImport("");
+    setPrevia(null);
+    if (!file) return;
+    const nombre = file.name.toLowerCase();
+    try {
+      if (nombre.endsWith(".xlsx") || nombre.endsWith(".xls") || nombre.endsWith(".csv")) {
+        if (!window.XLSX) {
+          setErrImport("No se pudo cargar el lector de Excel. Revisa tu internet e intenta de nuevo.");
+          return;
+        }
+        const buf = await file.arrayBuffer();
+        const wb = window.XLSX.read(buf, {
+          type: "array"
+        });
+        const hoja = wb.Sheets[wb.SheetNames[0]];
+        const filas = window.XLSX.utils.sheet_to_json(hoja, {
+          defval: ""
+        });
+        const prods = filasAProductos(filas);
+        if (!prods.length) {
+          setErrImport("No se encontraron productos en el archivo. Revisa que tenga las columnas Nombre, Precio y Moneda.");
+          return;
+        }
+        setPrevia(prods);
+      } else if (nombre.endsWith(".pdf")) {
+        if (!window.pdfjsLib) {
+          setErrImport("No se pudo cargar el lector de PDF. Usa mejor la plantilla de Excel, que es más confiable.");
+          return;
+        }
+        const buf = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({
+          data: buf
+        }).promise;
+        let texto = "";
+        for (let p = 1; p <= pdf.numPages; p++) {
+          const pg = await pdf.getPage(p);
+          const content = await pg.getTextContent();
+          texto += content.items.map(it => it.str).join(" ") + "\n";
+        }
+        // Del PDF intentamos líneas tipo "Nombre .... 1234" (número al final = precio)
+        const filas = [];
+        texto.split("\n").forEach(linea => {
+          const m = linea.match(/^(.+?)\s+([\d,]+(?:\.\d+)?)\s*$/);
+          if (m && m[1].trim().length > 3) {
+            const esDolar = /usd|\$|d[oó]lar/i.test(linea);
+            filas.push({
+              Nombre: m[1].trim(),
+              Precio: m[2],
+              Moneda: esDolar ? "Dólares" : "Lempiras"
+            });
+          }
+        });
+        const prods = filasAProductos(filas);
+        if (!prods.length) {
+          setErrImport("No pude leer productos claros de ese PDF. Los PDF varían mucho; te recomiendo usar la plantilla de Excel.");
+          return;
+        }
+        setPrevia(prods);
+      } else {
+        setErrImport("Formato no reconocido. Usa un archivo Excel (.xlsx) o PDF.");
+      }
+    } catch (e) {
+      console.error(e);
+      setErrImport("Hubo un problema al leer el archivo. Revisa que no esté dañado y vuelve a intentar.");
+    }
+  };
+  const confirmarImport = () => {
+    if (!previa) return;
+    const nuevos = previa.map((p, i) => {
+      const sku = (p.sku || "").trim() || (p.esTransductor || /accesor/i.test(p.cat) ? "AC-" : "EQ-") + String(Date.now() + i).slice(-5);
+      const {
+        moneda,
+        precioMostrar,
+        ...limpio
+      } = p;
+      const prod = {
+        ...limpio,
+        sku
+      };
+      dbGuardarProducto(prod);
+      return prod;
+    });
+    setCatalogo(prev => [...prev, ...nuevos]);
+    setPrevia(null);
+    setImportando(false);
+  };
   const toggleOfrecido = sku => setCatalogo(prev => prev.map(e => {
     if (e.sku !== sku) return e;
     const actualizado = {
@@ -13286,6 +13816,26 @@ function Catalogo({
   }, /*#__PURE__*/React.createElement(Printer, {
     size: 17
   }), " Catálogo PDF"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setImportando(true);
+      setPrevia(null);
+      setErrImport("");
+    },
+    style: {
+      background: "rgba(255,255,255,.12)",
+      color: "#fff",
+      border: "1px solid rgba(255,255,255,.25)",
+      borderRadius: 10,
+      padding: "11px 16px",
+      fontSize: 14,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      gap: 7
+    }
+  }, /*#__PURE__*/React.createElement(Upload, {
+    size: 17
+  }), " Importar productos"), /*#__PURE__*/React.createElement("button", {
     onClick: abrirNuevo,
     style: {
       background: "#2FA3A3",
@@ -13909,7 +14459,140 @@ function Catalogo({
     config: config,
     setConfig: setConfig,
     onClose: () => setModalPass(false)
-  }));
+  }), importando && /*#__PURE__*/React.createElement(Modal, {
+    titulo: "Importar productos",
+    onClose: () => {
+      setImportando(false);
+      setPrevia(null);
+    }
+  }, !previa ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: "#5A564A",
+      lineHeight: 1.6,
+      margin: "0 0 14px"
+    }
+  }, "Sube un archivo ", /*#__PURE__*/React.createElement("b", null, "Excel"), " (recomendado) o ", /*#__PURE__*/React.createElement("b", null, "PDF"), " con tus productos. Debe tener al menos: ", /*#__PURE__*/React.createElement("b", null, "Nombre"), ", ", /*#__PURE__*/React.createElement("b", null, "Precio"), " y ", /*#__PURE__*/React.createElement("b", null, "Moneda"), " (Lempiras o Dólares)."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#E6F4F4",
+      border: "1px solid #BCE2E2",
+      borderRadius: 10,
+      padding: "11px 14px",
+      marginBottom: 16,
+      fontSize: 12.5,
+      color: "#1A7373",
+      lineHeight: 1.5
+    }
+  }, /*#__PURE__*/React.createElement("b", null, "Regla de precios:"), " si la moneda es ", /*#__PURE__*/React.createElement("b", null, "Dólares"), ", la app aplica la fórmula (costo × multiplicador × tipo de cambio). Si es ", /*#__PURE__*/React.createElement("b", null, "Lempiras"), ", el precio se toma tal cual, ya como precio final."), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".xlsx,.xls,.csv,.pdf",
+    onChange: e => leerArchivo(e.target.files[0]),
+    style: {
+      display: "none"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1.5px dashed #C4D4EC",
+      borderRadius: 12,
+      padding: "26px 16px",
+      textAlign: "center",
+      background: "#F5F8FD"
+    }
+  }, /*#__PURE__*/React.createElement(Upload, {
+    size: 26,
+    color: "#2C6FB0",
+    style: {
+      margin: "0 auto 8px"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      color: "#2C6FB0"
+    }
+  }, "Elegir archivo"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#8A9AAA",
+      marginTop: 3
+    }
+  }, "Excel (.xlsx) o PDF"))), errImport && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#9A3B33",
+      fontSize: 12.5,
+      margin: "12px 0 0"
+    }
+  }, errImport)) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13.5,
+      color: "#3A3830",
+      margin: "0 0 12px"
+    }
+  }, "Encontré ", /*#__PURE__*/React.createElement("b", null, previa.length), " producto", previa.length !== 1 ? "s" : "", ". Revísalos y confirma para agregarlos al catálogo:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxHeight: 320,
+      overflowY: "auto",
+      border: "1px solid #EAE6DD",
+      borderRadius: 10
+    }
+  }, previa.map((p, i) => {
+    const precioCalc = p.moneda === "Lempiras" ? p.precioMostrar : p.precioMostrar * (p.esTransductor ? config.multAccesorio : config.multEquipo) * config.tipoCambio;
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 10,
+        padding: "9px 13px",
+        borderTop: i ? "1px solid #F0EDE6" : "none"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 500,
+        color: "#2A2824"
+      }
+    }, p.nombre), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: "#9A9488"
+      }
+    }, p.cat, " · ", p.precioMostrar.toLocaleString("es-HN"), " ", p.moneda, p.moneda === "Dólares" ? " (aplica fórmula)" : " (precio final)")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontFamily: "'Fraunces', serif",
+        fontSize: 15,
+        fontWeight: 600,
+        color: "#204090",
+        whiteSpace: "nowrap"
+      }
+    }, money(precioCalc)));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "flex-end",
+      gap: 8,
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPrevia(null),
+    style: btnGhost
+  }, "Elegir otro archivo"), /*#__PURE__*/React.createElement("button", {
+    onClick: confirmarImport,
+    style: {
+      ...btnPrimary,
+      background: "#2FA3A3"
+    }
+  }, "Agregar ", previa.length, " al catálogo")))));
 }
 
 // ---- Modal: editar fórmula de precios ----
