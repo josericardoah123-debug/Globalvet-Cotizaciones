@@ -781,35 +781,58 @@ function ieBadge(completo){
 /* =========================================================================
    PICKERS reutilizables
    ========================================================================= */
-// Elegir un equipo del catálogo (agrupado por categoría real)
+// Elegir un equipo O un accesorio del catálogo (agrupados por categoría real)
 function EquipoCatalogoPicker(props){
   const catalogo=props.catalogo||[];
+  const soloAcc=!!props.soloAccesorios;
+  const [modo,setModo]=useState(soloAcc?"accesorios":"equipos");
   const [busq,setBusq]=useState("");
   const q=ieNorm(busq);
-  const items=catalogo.filter(e=>e&&e.ofrecido!==false&&(!q||ieNorm(e.nombre).includes(q)||ieNorm(e.sku).includes(q)||ieNorm(e.cat).includes(q)));
-  // agrupar por cat
+
+  // EQUIPOS: productos de primer nivel del catálogo
+  const equipos=catalogo.filter(e=>e&&e.ofrecido!==false&&(!q||ieNorm(e.nombre).includes(q)||ieNorm(e.sku).includes(q)||ieNorm(e.cat).includes(q)));
   const grupos={};
-  items.forEach(e=>{const c=e.cat||"Sin categoría";(grupos[c]=grupos[c]||[]).push(e);});
+  equipos.forEach(e=>{const c=e.cat||"Sin categoría";(grupos[c]=grupos[c]||[]).push(e);});
   const cats=Object.keys(grupos).sort((a,b)=>a.localeCompare(b));
+
+  // ACCESORIOS: incluye los complementos que viven dentro de cada equipo
+  const accs=ieAccesoriosDisponibles(catalogo,props.config).filter(a=>!q||ieNorm(a.nombre).includes(q)||ieNorm(a.tipo).includes(q));
+  const gAcc={};
+  accs.forEach(a=>{const t=a.tipo||"Accesorio";(gAcc[t]=gAcc[t]||[]).push(a);});
+  const tiposAcc=Object.keys(gAcc).sort((a,b)=>a.localeCompare(b));
+
+  const elegirEquipo=e=>props.onElegir({sku:e.sku,nombre:e.nombre,cat:e.cat});
+  const elegirAcc=a=>props.onElegir({sku:a.sku||("ACC:"+ieNorm(a.nombre)),nombre:a.nombre,cat:a.tipo||"Accesorio"});
+
   return React.createElement("div",{style:ieS.modalBack,onClick:props.onCerrar},
     React.createElement("div",{style:ieS.modal,onClick:e=>e.stopPropagation()},
       React.createElement("div",{style:{display:"flex",alignItems:"center",marginBottom:12}},
-        React.createElement("h3",{style:{flex:1,margin:0,fontSize:17,fontFamily:"'Fraunces',Georgia,serif"}},"Elegir equipo del catálogo"),
+        React.createElement("h3",{style:{flex:1,margin:0,fontSize:17,fontFamily:"'Fraunces',Georgia,serif"}},"Elegir del catálogo"),
         React.createElement("button",{onClick:props.onCerrar,style:{background:"none",border:"none",fontSize:22,color:IE_COL.mut,lineHeight:1}},"✕")),
+      // cambiador Equipos / Accesorios
+      !soloAcc&&React.createElement("div",{style:{display:"flex",gap:7,marginBottom:10}},
+        React.createElement("button",{style:Object.assign({},ieS.chip(modo==="equipos"),{flex:1,justifyContent:"center",display:"flex"}),onClick:()=>setModo("equipos")},"Equipos"),
+        React.createElement("button",{style:Object.assign({},ieS.chip(modo==="accesorios"),{flex:1,justifyContent:"center",display:"flex"}),onClick:()=>setModo("accesorios")},"Accesorios")),
       React.createElement("div",{style:{position:"relative",marginBottom:10}},
         React.createElement("span",{style:{position:"absolute",left:12,top:13,color:IE_COL.mut}},React.createElement(Search,{size:18})),
-        React.createElement("input",{style:Object.assign({},ieS.input,{paddingLeft:38}),placeholder:"Buscar por nombre, código o categoría…",value:busq,onChange:e=>setBusq(e.target.value)})),
+        React.createElement("input",{style:Object.assign({},ieS.input,{paddingLeft:38}),placeholder:modo==="equipos"?"Buscar equipo por nombre, código o categoría…":"Buscar accesorio…",value:busq,onChange:e=>setBusq(e.target.value)})),
       catalogo.length===0
         ? React.createElement("div",{style:ieS.empty},"El catálogo aún no ha cargado. Inicia sesión con conexión para verlo.")
-        : cats.length===0
-          ? React.createElement("div",{style:ieS.empty},"Ningún equipo coincide con la búsqueda.")
-          : cats.map(c=>React.createElement("div",{key:c},
-              React.createElement("div",{style:ieS.catHead},c+" ("+grupos[c].length+")"),
-              grupos[c].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(e=>React.createElement("button",{key:e.sku||e.nombre,onClick:()=>props.onElegir({sku:e.sku,nombre:e.nombre,cat:e.cat}),style:{display:"flex",width:"100%",textAlign:"left",gap:8,alignItems:"center",padding:"12px 12px",marginBottom:6,border:"1px solid "+IE_COL.bord,borderRadius:11,background:"#fff"}},
-                React.createElement("span",{style:{flex:1,fontSize:14.5,fontWeight:500}},e.nombre),
-                e.sku&&React.createElement("span",{style:{fontSize:11.5,color:IE_COL.mut}},e.sku)
-              ))
-            ))
+        : modo==="equipos"
+          ? (cats.length===0
+              ? React.createElement("div",{style:ieS.empty},"Ningún equipo coincide con la búsqueda.")
+              : cats.map(c=>React.createElement("div",{key:c},
+                  React.createElement("div",{style:ieS.catHead},c+" ("+grupos[c].length+")"),
+                  grupos[c].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map(e=>React.createElement("button",{key:e.sku||e.nombre,onClick:()=>elegirEquipo(e),style:{display:"flex",width:"100%",textAlign:"left",gap:8,alignItems:"center",padding:"12px 12px",marginBottom:6,border:"1px solid "+IE_COL.bord,borderRadius:11,background:"#fff"}},
+                    React.createElement("span",{style:{flex:1,fontSize:14.5,fontWeight:500}},e.nombre),
+                    e.sku&&React.createElement("span",{style:{fontSize:11.5,color:IE_COL.mut}},e.sku))))))
+          : (tiposAcc.length===0
+              ? React.createElement("div",{style:ieS.empty},"Ningún accesorio coincide con la búsqueda.")
+              : tiposAcc.map(t=>React.createElement("div",{key:t},
+                  React.createElement("div",{style:ieS.catHead},t+" ("+gAcc[t].length+")"),
+                  gAcc[t].sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||"")).map((a,i)=>React.createElement("button",{key:i,onClick:()=>elegirAcc(a),style:{display:"flex",width:"100%",textAlign:"left",gap:8,alignItems:"center",padding:"12px 12px",marginBottom:6,border:"1px solid "+IE_COL.bord,borderRadius:11,background:"#fff"}},
+                    React.createElement("span",{style:{flex:1,fontSize:14.5,fontWeight:500}},a.nombre),
+                    a.deEquipo&&React.createElement("span",{style:{fontSize:11,color:IE_COL.mut}},"de "+a.deEquipo))))))
     )
   );
 }
@@ -1050,14 +1073,14 @@ function SecRegistrar(props){
   return React.createElement("div",null,
     // Selector de equipo (del catálogo)
     React.createElement("div",{style:ieS.card},
-      React.createElement("label",{style:ieS.label},"Equipo (del catálogo)"),
+      React.createElement("label",{style:ieS.label},"Equipo o accesorio (del catálogo)"),
       equipoSel
         ? React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
             React.createElement("div",{style:{flex:1,minWidth:0}},
               React.createElement("div",{style:{fontWeight:600,fontSize:15}},equipoSel.nombre),
               equipoSel.sku&&React.createElement("div",{style:{fontSize:12,color:IE_COL.mut}},equipoSel.sku)),
             React.createElement("button",{style:{background:"#EEF2FA",border:"none",color:IE_COL.azul,padding:"9px 12px",borderRadius:10,fontWeight:600,fontSize:13},onClick:()=>setEligiendo(true)},"Cambiar"))
-        : React.createElement("button",{style:ieS.btnGhost,onClick:()=>setEligiendo(true)},React.createElement(Search,{size:17})," Elegir equipo del catálogo")
+        : React.createElement("button",{style:ieS.btnGhost,onClick:()=>setEligiendo(true)},React.createElement(Search,{size:17})," Elegir del catálogo (equipo o accesorio)")
     ),
     equipoSel&&React.createElement("div",null,
       React.createElement("div",{style:ieS.card},
